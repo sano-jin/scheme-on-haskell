@@ -9,9 +9,61 @@ import Data.Complex
 import Data.Array
 import Control.Monad.Except
 import System.IO
+import Data.IORef
 instance Show LispVal where show = showVal
 instance Show LispError where show = showError
 type ThrowsError = Either LispError
+type Env = IORef [(String, IORef LispVal)]
+
+nullEnv :: IO Env
+nullEnv = newIORef []
+
+type IOThrowsError = ExceptT LispError IO
+
+liftThrows :: ThrowsError a -> IOThrowsError a
+liftThrows (Left err) = throwError err
+liftThrows (Right val) = return val
+
+
+runIOThrows :: IOThrowsError String -> IO String
+runIOThrows action = runExceptT (trapError action) >>= return . extractValue
+
+isBound :: Env -> String -> IO Bool
+isBound envRef var = readIORef envRef >>= return . maybe False (const True) . lookup var
+
+
+getVar :: Env -> String -> IOThrowsError LispVal
+getVar envRef var = do env <- liftIO $ readIORef envRef
+                       maybe (throwError $ UnboudVar "Getting an unbound variable: " var)
+                         (liftIO . readIORef)
+                         (lookup var env)
+
+setVar :: Env -> String -> LispVal -> IOThrowsError LispVal
+setVar envRef var value = do env <- liftIO $ readIORef envRef
+                             maybe (throwError $ UnboudVar "Setting an unboud variable: " var)
+                               (liftIO . (flip writeIORef value))
+                               (lookup var env)
+                             return value
+
+defineVar :: Env -> String -> LispVal -> IOThrowsError LispVal
+defineVar envRef var value = do
+  alreadyDefined <- liftIO $ isBound envRef var
+  if alreadyDefined
+    then setVar envRef var value >> return value
+    else liftIO $ do
+    valueRef <- newIORef value
+    env <- readIORef envRef
+    writeIORef envRef ((var, valueRef) : env)
+    return value
+
+bindVars :: Env -> [(String, LispVal)] -> IO Env
+bindVars envRef bindings = readIORef envRef >>= extendEnv bindings >>= newIORef
+  where extendEnv bidindgs env = liftM (++ env) (mapM addBinding bindings)
+        addBinding (var, value) = do ref <- newIORef value
+                                     return (var, ref)
+       
+        
+                             
 
 data LispVal = Atom String
              | List [ LispVal ]
@@ -242,35 +294,41 @@ readExpr input = case parse parseExpr "lisp" input of
   Right val -> return val
 
 
-eval :: LispVal -> ThrowsError LispVal
-eval val@(String _) = return val
-eval val@(Number _) = return val
-eval val@(Float _) = return val
-eval val@(Bool _) = return val
-eval val@(Charactor _) = return val
-eval val@(Ratio _) = return val
-eval val@(Complex _) = return val
-eval (List [Atom "quote", val]) = return val
-eval (List [Atom "if", pred, conseq, alt]) =
-  do result <- eval pred
+eval :: Env -> LispVal -> IOThrowsError LispVal
+eval env val@(String _) = return val
+eval env val@(Number _) = return val
+eval env val@(Float _) = return val
+eval env val@(Bool _) = return val
+eval env val@(Charactor _) = return val
+eval env val@(Ratio _) = return val
+eval env val@(Complex _) = return val
+eval env (Atom id) = getVar env id
+eval env (List [Atom "quote", val]) = return val
+eval env (List [Atom "if", pred, conseq, alt]) =
+  do result <- eval env pred
      case result of
-       Bool True -> eval conseq 
-       Bool False -> eval alt
+       Bool True -> eval env conseq 
+       Bool False -> eval env alt
        _ -> throwError $ TypeMismatch "bool" pred       
-eval (List ((Atom "cond"):cs)) = do
-         b <- (liftM (take 1 . dropWhile f) $ mapM condClause cs) >>= cdr
-         car [b] >>= eval
-           where condClause (List [p, b]) = do q <- eval p
-                                               case q of
-                                                 Bool _ -> return $ List [q, b]
-                                                 _ -> throwError $ TypeMismatch "bool" q
-                 condClause v             = throwError $ TypeMismatch "(pred body)" v
-                 f (List [p,b]) = case p of
-                                    (Bool False) -> True
-                                    _            -> False
-         
-eval (List (Atom func : args)) = mapM eval args >>= apply func
-eval badForm = throwError $ BadSpecialForm "Unrecognized special form" badForm
+eval env (List (Atom "cond" : expr : rest)) = do
+  eval' expr rest
+  where eval' (List [cond, value]) (x : xs) = do
+          result <- eval env cond
+          case result of
+            Bool False -> eval' x xs
+            Bool True -> eval env value
+            otherwise -> throwError $ TypeMismatch "boolean" cond
+        eval' (List [Atom "else", value]) [] = do
+          eval env value
+        eval' (List [cond, value]) [] = do
+          result <- eval env cond
+          case result of
+            Bool True -> eval env value
+            otherwise -> throwError $ TypeMismatch "boolean" cond
+eval env (List [Atom "set!", Atom var, form]) = eval env form >>= setVar env var
+eval env (List [Atom "define", Atom var, form]) = eval env form >>= defineVar env var
+eval env (List (Atom func : args)) = mapM (eval env) args >>= liftThrows . apply func
+eval env badForm = throwError $ BadSpecialForm "Unrecognized special form" badForm
 
 car :: [LispVal] -> ThrowsError LispVal
 car [List (x : xs)] = return x
@@ -423,18 +481,20 @@ string2symbol (String s) = return $ Atom s
 string2symbol _ = return $ Atom ""
 
 
-
 flushStr :: String -> IO ()
 flushStr str = putStr str >> hFlush stdout
 
 readPrompt :: String -> IO String
 readPrompt prompt = flushStr prompt >> getLine
 
-evalString :: String -> IO String
-evalString expr = return $ extractValue $ trapError (liftM show $ readExpr expr >>= eval)
+evalString :: Env -> String -> IO String
+evalString env expr = runIOThrows $ liftM show $ (liftThrows $ readExpr expr) >>= eval env
 
-evalAndPrint :: String -> IO ()
-evalAndPrint expr = evalString expr >>= putStrLn
+evalAndPrint :: Env -> String -> IO ()
+evalAndPrint env expr = evalString env expr >>= putStrLn
+
+runOne :: String -> IO ()
+runOne expr = nullEnv >>= flip evalAndPrint expr
 
 until_ :: Monad m => (a -> Bool) -> m a -> (a -> m ()) -> m ()
 until_ pred prompt action = do
@@ -444,12 +504,12 @@ until_ pred prompt action = do
     else action result >> until_ pred prompt action
     
 runRepl :: IO ()
-runRepl = until_ (== "quit") (readPrompt "Lisp>>> ") evalAndPrint
+runRepl = nullEnv >>= until_ (== "quit") (readPrompt "Lisp>>> ") . evalAndPrint
 
 main :: IO ()
 main = do
   args <- getArgs
   case length args of
     0 -> runRepl
-    1 -> evalAndPrint $ args !! 0
+    1 -> runOne $ args !! 0
     otherwise -> putStrLn "Program takes only 0 or 1 argument"
