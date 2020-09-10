@@ -1,5 +1,5 @@
 {-# LANGUAGE ExistentialQuantification #-}
-module Main where
+module IO where
 import System.Environment
 import Text.ParserCombinators.Parsec 
 import Control.Monad

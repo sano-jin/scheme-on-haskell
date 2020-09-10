@@ -1,3 +1,16 @@
+{-# LANGUAGE ExistentialQuantification #-}
+module Main where
+import System.Environment
+import Text.ParserCombinators.Parsec 
+import Control.Monad
+import Numeric
+import Data.Ratio
+import Data.Complex
+import Data.Array
+import Control.Monad.Except
+import System.IO
+
+data Unpacker = forall a . Eq a => AnyUnpacker (LispVal -> ThrowsError a)
 
 
 flushStr :: String -> IO ()
