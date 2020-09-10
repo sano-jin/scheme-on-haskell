@@ -1,6 +1,7 @@
 {-# LANGUAGE ExistentialQuantification #-}
 module Parser (
   LispVal(..),
+  
   ) where
 
 import System.Environment
@@ -12,29 +13,11 @@ import Data.Complex
 import Data.Array
 import Control.Monad.Except
 import System.IO
-       
-data LispVal = Atom String
-             | List [ LispVal ]
-             | DottedList [ LispVal ] LispVal
-             | String String
-             | Charactor Char
-             | Bool Bool
-             | Number Integer
-             | Float Double
-             | Ratio Rational
-             | Complex (Complex Double)
-             | Vector (Array Int LispVal)
-             | PrimitiveFunc ([LispVal] -> ThrowsError LispVal)
-             | Func { params :: [String],
-                      vararg :: (Maybe String),
-                      body :: [LispVal],
-                      closure :: Env }
-             | IOFunc ([LispVal] -> IOThrowsError LispVal)
-             | Port Handle
-
-data Unpacker = forall a . Eq a => AnyUnpacker (LispVal -> ThrowsError a)
 
 -- lexer
+spaces1 :: Parser ()
+spaces1 = skipMany1 space
+
 parseCharactor :: Parser LispVal
 parseCharactor = do try $ string "#\\"
                     value <- try (string "newline" <|> string "space")
@@ -167,8 +150,14 @@ parseVector :: Parser LispVal
 parseVector = do arrayValues <- sepBy parseExpr spaces1
                  return $ Vector (listArray (0, (length arrayValues - 1)) arrayValues)
 
-spaces1 :: Parser ()
-spaces1 = skipMany1 space
+parseList :: Parser LispVal
+parseList = do char '(' >> spaces
+               head <- sepEndBy parseExpr spaces1
+               ( do char '.' >> spaces1
+                    tail <- parseExpr
+                    spaces >> char ')'
+                    return $ DottedList head tail
+                 ) <|> (spaces >> char ')' >> (return $ List head))
 
 parseExpr :: Parser LispVal
 parseExpr = parseAtom
@@ -188,12 +177,3 @@ parseExpr = parseAtom
                         return x)
             <|> parseList
   
-parseList :: Parser LispVal
-parseList = do char '(' >> spaces
-               head <- sepEndBy parseExpr spaces1
-               ( do char '.' >> spaces1
-                    tail <- parseExpr
-                    spaces >> char ')'
-                    return $ DottedList head tail
-                 ) <|> (spaces >> char ')' >> (return $ List head))
-
