@@ -1,8 +1,5 @@
 {-# LANGUAGE ExistentialQuantification #-}
-module Parser (
-  LispVal(..),
-  
-  ) where
+module Parser where
 
 import System.Environment
 import Text.ParserCombinators.Parsec 
@@ -13,6 +10,7 @@ import Data.Complex
 import Data.Array
 import Control.Monad.Except
 import System.IO
+import Syntax
 
 -- lexer
 spaces1 :: Parser ()
@@ -61,7 +59,7 @@ parseNumber = parseDicimal1
               <|> parseBin
               
 parseDicimal1 :: Parser LispVal
-parseDicimal1 =  liftM (Number . read ) many1 digit 
+parseDicimal1 =  liftM (Number . read) $  many1 digit 
 
 parseDicimal2 :: Parser LispVal
 parseDicimal2 = do try $ string "#d"

@@ -9,13 +9,15 @@ import Data.Complex
 import Data.Array
 import Control.Monad.Except
 import System.IO
+import Data.IORef
 
-
+type ThrowsError = Either LispError
+type Env = IORef [(String, IORef LispVal)]
+type IOThrowsError = ExceptT LispError IO
 
 instance Show LispVal where show = showVal
 instance Show LispError where show = showError
 
-       
 data LispVal = Atom String
              | List [ LispVal ]
              | DottedList [ LispVal ] LispVal
@@ -34,7 +36,6 @@ data LispVal = Atom String
                       closure :: Env }
              | IOFunc ([LispVal] -> IOThrowsError LispVal)
              | Port Handle
-
 
 data LispError = NumArgs Integer [LispVal]
                | TypeMismatch String LispVal
